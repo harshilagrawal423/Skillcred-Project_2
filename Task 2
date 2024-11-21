@@ -1,0 +1,154 @@
+-- Question 2.1: Using IQR techniques to detect potential outliers in consignments based on their CFT values.
+
+-- Step 1: Calculate total CFT for each consignment
+WITH CFT_Data AS (
+    SELECT 
+        cv.consignment_id,
+        -- Calculate total CFT by multiplying length, breadth, and height, then converting to cubic feet
+        SUM(cv.length * cv.breadth * cv.height) / 1728 AS total_cft
+    FROM 
+        consignment_volumes cv
+    -- Group by consignment ID to aggregate the CFT values
+    GROUP BY 
+        cv.consignment_id
+),
+
+-- Step 2: Calculate the 5th and 95th percentiles for the CFT values
+CFT_Percentiles AS (
+    SELECT 
+        -- Calculate the lower limit (5th percentile)
+        PERCENTILE_CONT(0.05) WITHIN GROUP (ORDER BY total_cft) AS lower_limit,
+        -- Calculate the upper limit (95th percentile)
+        PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY total_cft) AS upper_limit
+    FROM 
+        CFT_Data  -- Use the previously calculated CFT data
+)
+
+-- Step 3: Identify potential measurement inaccuracies in consignments
+SELECT 
+    cd.consignment_id,  -- Select consignment ID for reference
+    cd.total_cft,       -- Select the total CFT value for display
+    CASE 
+        -- Flag the consignment as potentially mis-measured (1) if total CFT is outside the limits
+        WHEN cd.total_cft < cp.lower_limit OR cd.total_cft > cp.upper_limit THEN 1 
+        ELSE 0  -- Otherwise, flag as correctly measured (0)
+    END AS measurement_flag
+FROM 
+    CFT_Data cd  -- Reference the CFT data CTE
+CROSS JOIN CFT_Percentiles cp;  -- Use CROSS JOIN to combine CFT data with the calculated percentile limits
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- 2.2: IQR Technique for CFT Values
+WITH Weight_CFT_Data AS (
+    SELECT 
+        cv.consignment_id,
+        SUM(cv.length * cv.breadth * cv.height) / 1728 AS total_cft  -- Calculate CFT
+    FROM 
+        consignment_volumes cv
+    GROUP BY 
+        cv.consignment_id
+),
+CFT_Stats AS (
+    SELECT 
+        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_cft) AS Q1,  -- 25th percentile
+        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_cft) AS Q3   -- 75th percentile
+    FROM 
+        Weight_CFT_Data
+),
+IQR_Stats AS (
+    SELECT 
+        Q1, Q3,
+        (Q3 - Q1) AS IQR  -- Interquartile Range
+    FROM 
+        CFT_Stats
+)
+SELECT 
+    wcd.consignment_id,
+    CASE 
+        WHEN wcd.total_cft < (iqr.Q1 - 1.5 * iqr.IQR) OR wcd.total_cft > (iqr.Q3 + 1.5 * iqr.IQR)
+        THEN 1  -- Flag as outlier (1)
+        ELSE 0  -- Correctly measured (0)
+    END AS measurement_flag
+FROM 
+    Weight_CFT_Data wcd
+CROSS JOIN 
+    IQR_Stats iqr;
+
+
+
+--2.3: Standard Deviation Method for Weight
+WITH Weight_Stats AS (
+    SELECT 
+        AVG(weight) AS avg_weight,
+        STDDEV(weight) AS std_dev_weight
+    FROM 
+        consignment
+)
+SELECT 
+    c.id AS consignment_id,
+    CASE 
+        WHEN c.weight < (ws.avg_weight - 2 * ws.std_dev_weight) 
+             OR c.weight > (ws.avg_weight + 2 * ws.std_dev_weight)
+        THEN 1  -- Flag as outlier (1)
+        ELSE 0  -- Correctly measured (0)
+    END AS measurement_flag
+FROM 
+    consignment c
+CROSS JOIN 
+    Weight_Stats ws;
+
+
+
+--2.4: Expected Weight Analysis
+
+WITH Weight_CFT_Data AS (
+    SELECT 
+        cv.consignment_id,
+        SUM(cv.length * cv.breadth * cv.height) / 1728 AS total_cft,  -- Calculate CFT
+        c.weight
+    FROM 
+        consignment_volumes cv
+    JOIN consignment c ON cv.consignment_id = c.id
+    GROUP BY 
+        cv.consignment_id, c.weight
+),
+Expected_Weight_Data AS (
+    SELECT 
+        consignment_id,
+        total_cft * 10 AS expected_weight  -- Assuming 10 lbs per cubic foot as standard
+    FROM 
+        Weight_CFT_Data
+)
+SELECT 
+    wcd.consignment_id,
+    CASE 
+        WHEN wcd.weight < 0.8 * ewd.expected_weight 
+             OR wcd.weight > 1.2 * ewd.expected_weight
+        THEN 1  -- Flag as outlier (1)
+        ELSE 0  -- Correctly measured (0)
+    END AS measurement_flag
+FROM 
+    Weight_CFT_Data wcd
+JOIN 
+    Expected_Weight_Data ewd ON wcd.consignment_id = ewd.consignment_id;
+
+
